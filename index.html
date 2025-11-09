@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Auth App</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        /* Custom styles for better focus on mobile */
+        .auth-card {
+            max-width: 450px;
+            width: 95%;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app" class="auth-card p-6 sm:p-8 bg-white shadow-2xl rounded-xl transition-all duration-300">
+        <h1 class="text-3xl font-bold mb-4 text-center text-gray-800">Secure Auth Demo</h1>
+
+        <!-- Loading Spinner -->
+        <div id="loading-spinner" class="hidden text-center py-4">
+            <svg class="animate-spin h-8 w-8 text-indigo-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+        </div>
+
+        <!-- Message Box -->
+        <div id="message-box" class="hidden p-3 mb-4 rounded-lg text-sm transition-all duration-300"></div>
+
+        <!-- Authentication View (Login/Sign Up Form) -->
+        <div id="auth-view" class="space-y-4">
+            <h2 id="auth-title" class="text-2xl font-semibold mb-6 text-center text-indigo-600">Log In</h2>
+            
+            <input type="email" id="email-input" placeholder="Email Address" 
+                   class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150" required>
+            
+            <input type="password" id="password-input" placeholder="Password (min 6 characters)" 
+                   class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150" required>
+            
+            <div class="flex flex-col space-y-2">
+                <button id="auth-action-button" onclick="handleAuthAction()" 
+                        class="w-full bg-indigo-600 text-white p-3 rounded-lg font-semibold hover:bg-indigo-700 transition duration-150 shadow-md">
+                    Log In
+                </button>
+                <button id="toggle-auth-mode-button" onclick="toggleAuthMode()" 
+                        class="w-full text-indigo-600 p-3 rounded-lg font-medium hover:bg-indigo-50 transition duration-150 border border-indigo-100">
+                    Need an account? Sign Up
+                </button>
+            </div>
+        </div>
+
+        <!-- Logged In View -->
+        <div id="logged-in-view" class="hidden text-center space-y-4">
+            <p class="text-lg text-gray-700">Welcome! You are currently logged in.</p>
+            <p class="text-sm text-gray-500 break-all">User ID: <code id="user-id-display" class="bg-gray-100 p-1 rounded-md text-gray-800 font-mono"></code></p>
+            <button onclick="handleLogout()" 
+                    class="w-full mt-4 bg-red-500 text-white p-3 rounded-lg font-semibold hover:bg-red-600 transition duration-150 shadow-md">
+                Log Out
+            </button>
+        </div>
+    </div>
+
+    <script type="module">
+        // Global variables for Firebase configuration and initialization
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // Import necessary Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInWithCustomToken, 
+            signInAnonymously, 
+            createUserWithEmailAndPassword, 
+            signInWithEmailAndPassword, 
+            signOut, 
+            onAuthStateChanged 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Firebase instances
+        let app, db, auth;
+        let authMode = 'login'; // 'login' or 'signup'
+
+        // UI Element references
+        const authView = document.getElementById('auth-view');
+        const loggedInView = document.getElementById('logged-in-view');
+        const authTitle = document.getElementById('auth-title');
+        const authActionButton = document.getElementById('auth-action-button');
+        const toggleAuthModeButton = document.getElementById('toggle-auth-mode-button');
+        const emailInput = document.getElementById('email-input');
+        const passwordInput = document.getElementById('password-input');
+        const userIdDisplay = document.getElementById('user-id-display');
+        const messageBox = document.getElementById('message-box');
+        const loadingSpinner = document.getElementById('loading-spinner');
+
+        /**
+         * Initializes Firebase and handles initial authentication.
+         */
+        async function initFirebase() {
+            try {
+                if (firebaseConfig) {
+                    app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    setLogLevel('debug'); // Enable logging for debugging
+
+                    // Sign in with custom token or anonymously
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                        console.log("Signed in with custom token.");
+                    } else {
+                        await signInAnonymously(auth);
+                        console.log("Signed in anonymously.");
+                    }
+
+                    // Set up the listener for auth state changes
+                    setupAuthListener();
+                } else {
+                    showMessage("Firebase configuration is missing.", 'error');
+                }
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+                showMessage(`Initialization Error: ${error.message}`, 'error');
+            }
+        }
+
+        /**
+         * Sets up the Firebase Auth state change listener.
+         */
+        function setupAuthListener() {
+            onAuthStateChanged(auth, (user) => {
+                setLoading(false);
+                updateUI(user);
+            });
+        }
+
+        /**
+         * Toggles the UI between Login and Sign Up mode.
+         */
+        window.toggleAuthMode = function() {
+            if (authMode === 'login') {
+                authMode = 'signup';
+                authTitle.textContent = 'Create Account';
+                authActionButton.textContent = 'Sign Up';
+                toggleAuthModeButton.textContent = 'Already have an account? Log In';
+            } else {
+                authMode = 'login';
+                authTitle.textContent = 'Log In';
+                authActionButton.textContent = 'Log In';
+                toggleAuthModeButton.textContent = 'Need an account? Sign Up';
+            }
+            // Clear messages and input on mode change
+            showMessage('', 'clear');
+            passwordInput.value = '';
+        }
+
+        /**
+         * Handles the main authentication action (Login or Sign Up) based on current mode.
+         */
+        window.handleAuthAction = async function() {
+            const email = emailInput.value.trim();
+            const password = passwordInput.value.trim();
+
+            if (!email || !password) {
+                showMessage("Please enter both email and password.", 'error');
+                return;
+            }
+
+            setLoading(true);
+            try {
+                if (authMode === 'signup') {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                    showMessage("Account created successfully! You are now logged in.", 'success');
+                } else {
+                    await signInWithEmailAndPassword(auth, email, password);
+                    showMessage("Logged in successfully!", 'success');
+                }
+            } catch (error) {
+                console.error(`Auth Error (${authMode}):`, error);
+                // Clean up error message for display
+                const message = error.message.replace('Firebase: Error (auth/', '').replace(/\)\.$/, '').replace(/-/g, ' ');
+                showMessage(`Authentication failed: ${message}`, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        /**
+         * Handles user sign out.
+         */
+        window.handleLogout = async function() {
+            setLoading(true);
+            try {
+                await signOut(auth);
+                showMessage("Logged out successfully.", 'success');
+            } catch (error) {
+                console.error("Logout Error:", error);
+                showMessage(`Logout failed: ${error.message}`, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        /**
+         * Updates the UI based on the user's authentication status.
+         * @param {Object | null} user - The current Firebase user object or null.
+         */
+        function updateUI(user) {
+            if (user && user.email) {
+                // User is logged in with email/password
+                authView.classList.add('hidden');
+                loggedInView.classList.remove('hidden');
+                userIdDisplay.textContent = user.uid;
+                showMessage(`Welcome, ${user.email}!`, 'success');
+            } else if (user && !user.email) {
+                // User is logged in anonymously (should switch to Auth Form)
+                authView.classList.remove('hidden');
+                loggedInView.classList.add('hidden');
+                showMessage("Please log in or sign up to secure your account.", 'info');
+            }
+             else {
+                // User is logged out
+                authView.classList.remove('hidden');
+                loggedInView.classList.add('hidden');
+                showMessage('', 'clear'); // Clear any success messages
+                userIdDisplay.textContent = '';
+            }
+        }
+
+        /**
+         * Sets the loading state visibility.
+         * @param {boolean} isLoading - true to show spinner, false to hide.
+         */
+        function setLoading(isLoading) {
+            loadingSpinner.classList.toggle('hidden', !isLoading);
+            const elementsToDisable = [emailInput, passwordInput, authActionButton, toggleAuthModeButton];
+            elementsToDisable.forEach(el => el.disabled = isLoading);
+        }
+
+        /**
+         * Displays a temporary message in the message box.
+         * @param {string} message - The message content.
+         * @param {'success' | 'error' | 'info' | 'clear'} type - The message type.
+         */
+        function showMessage(message, type = 'info') {
+            messageBox.textContent = message;
+            messageBox.classList.remove('hidden', 'bg-green-100', 'text-green-800', 'bg-red-100', 'text-red-800', 'bg-blue-100', 'text-blue-800');
+
+            if (type === 'clear' || !message) {
+                messageBox.classList.add('hidden');
+            } else if (type === 'success') {
+                messageBox.classList.add('bg-green-100', 'text-green-800');
+            } else if (type === 'error') {
+                messageBox.classList.add('bg-red-100', 'text-red-800');
+            } else if (type === 'info') {
+                 messageBox.classList.add('bg-blue-100', 'text-blue-800');
+            }
+        }
+
+        // Initialize the application when the window loads
+        window.onload = function () {
+            setLoading(true);
+            initFirebase();
+        }
+
+    </script>
+</body>
+</html>
